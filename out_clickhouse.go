@@ -51,7 +51,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 	clickhouseHosts := output.FLBPluginConfigKey(plugin, "clickhouse_hosts")
 	if clickhouseHosts != "" {
-		logger.Infof("plugin clickhouse_hosts = '%s'\n", clickhouseHosts)
+		logger.Infof("plugin clickhouse_hosts = %s", clickhouseHosts)
 		hosts = strings.Split(clickhouseHosts, ",")
 	} else {
 		logger.Error("you must set hosts of clickhouse!")
@@ -156,7 +156,8 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
-	logger.Infof("flush called for %s", output.FLBPluginGetContext(ctx).(string))
+	// id := output.FLBPluginGetContext(ctx).(string)
+	// logger.Infof("flush called for %s", id)
 	// create Fluent Bit decoder
 	dec := output.NewDecoder(data, int(length))
 
