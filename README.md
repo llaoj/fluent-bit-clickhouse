@@ -2,6 +2,8 @@
 
 Fluent-Bit go clickhouse output plugin
 
+For example:
+
 ``` sh
 docker run --rm -it \
     -v /var/log:/var/log \
@@ -14,5 +16,5 @@ docker run --rm -it \
     -e CLICKHOUSE_PASSWORD=<password> \
     -e CLICKHOUSE_TABLE=<table> \
     -e CLICKHOUSE_COLUMNS=<column1,column2,column3...> \
-    registry.cn-beijing.aliyuncs.com/llaoj/fluent-bit-clickhouse:v0.0.25 bash
+    registry.cn-beijing.aliyuncs.com/llaoj/fluent-bit-clickhouse:v0.1.2 bash
 ```
