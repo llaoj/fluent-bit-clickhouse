@@ -42,6 +42,8 @@ func FLBPluginRegister(def unsafe.Pointer) int {
 func FLBPluginInit(plugin unsafe.Pointer) int {
 	id := output.FLBPluginConfigKey(plugin, "id")
 	logger.Infof("[multiinstance] id = %q", id)
+	// Set the context to point to any Go variable
+	output.FLBPluginSetContext(plugin, id)
 
 	logLevel := output.FLBPluginConfigKey(plugin, "clickhouse_log_level")
 	if logLevel != "" {
