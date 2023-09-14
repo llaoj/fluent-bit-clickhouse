@@ -40,6 +40,9 @@ func FLBPluginRegister(def unsafe.Pointer) int {
 
 //export FLBPluginInit
 func FLBPluginInit(plugin unsafe.Pointer) int {
+	id := output.FLBPluginConfigKey(plugin, "id")
+	logger.Infof("[multiinstance] id = %q", id)
+
 	logLevel := output.FLBPluginConfigKey(plugin, "clickhouse_log_level")
 	if logLevel != "" {
 		initLogger(logLevel)
@@ -156,8 +159,9 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
-	// id := output.FLBPluginGetContext(ctx).(string)
-	// logger.Infof("flush called for %s", id)
+	id := output.FLBPluginGetContext(ctx).(string)
+	logger.Infof("[multiinstance] Flush called for id: %s", id)
+
 	// create Fluent Bit decoder
 	dec := output.NewDecoder(data, int(length))
 
