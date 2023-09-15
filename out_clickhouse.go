@@ -17,7 +17,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-type ClickHouse struct {
+type Clickhouse struct {
 	logger     *logrus.Logger
 	hosts      []string
 	database   string
@@ -33,7 +33,7 @@ type ClickHouse struct {
 
 const InsertSQLExpr = "INSERT INTO %s (%s) VALUES (%s)"
 
-var config map[string]ClickHouse
+var config = make(map[string]*Clickhouse, 0)
 
 //export FLBPluginRegister
 func FLBPluginRegister(def unsafe.Pointer) int {
@@ -42,7 +42,7 @@ func FLBPluginRegister(def unsafe.Pointer) int {
 
 //export FLBPluginInit
 func FLBPluginInit(plugin unsafe.Pointer) int {
-	ch := ClickHouse{
+	ch := &Clickhouse{
 		logger: logrus.New(),
 	}
 
