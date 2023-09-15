@@ -17,21 +17,23 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var (
-	logger *logrus.Logger
+type ClickHouse struct {
+	logger     *logrus.Logger
+	hosts      []string
+	database   string
+	username   string
+	password   string
+	table      string
+	columns    []string
+	conn       driver.Conn
+	insertSQL  string
+	buffer     []map[interface{}]interface{}
+	bufferSize int
+}
 
-	hosts    []string
-	database string
-	username string
-	password string
-	table    string
-	columns  []string
-	conn     driver.Conn
+const InsertSQLExpr = "INSERT INTO %s (%s) VALUES (%s)"
 
-	insertSQL  = "INSERT INTO %s (%s) VALUES (%s)"
-	buffer     = make([]map[interface{}]interface{}, 0)
-	bufferSize = 1024
-)
+var config map[string]ClickHouse
 
 //export FLBPluginRegister
 func FLBPluginRegister(def unsafe.Pointer) int {
@@ -40,90 +42,102 @@ func FLBPluginRegister(def unsafe.Pointer) int {
 
 //export FLBPluginInit
 func FLBPluginInit(plugin unsafe.Pointer) int {
+	ch := ClickHouse{
+		logger: logrus.New(),
+	}
+
 	id := output.FLBPluginConfigKey(plugin, "id")
-	logger.Infof("[multiinstance] id = %q", id)
-	// Set the context to point to any Go variable
-	output.FLBPluginSetContext(plugin, id)
+	if id != "" {
+		ch.logger.Infof("plugin clickhouse context id = %s", id)
+		output.FLBPluginSetContext(plugin, id)
+	} else {
+		ch.logger.Error("you must set id of clickhouse!")
+		return output.FLB_ERROR
+	}
 
 	logLevel := output.FLBPluginConfigKey(plugin, "clickhouse_log_level")
 	if logLevel != "" {
-		initLogger(logLevel)
-		logger.Infof("plugin clickhouse_log_level = %s", logLevel)
+		ch.logger.Infof("plugin clickhouse_log_level = %s", logLevel)
+		ch.logger = initLogger(id, logLevel)
 	} else {
-		logger.Error("you must set log_level of clickhouse!")
+		ch.logger.Error("you must set log_level of clickhouse!")
 		return output.FLB_ERROR
 	}
 
-	clickhouseHosts := output.FLBPluginConfigKey(plugin, "clickhouse_hosts")
-	if clickhouseHosts != "" {
-		logger.Infof("plugin clickhouse_hosts = %s", clickhouseHosts)
-		hosts = strings.Split(clickhouseHosts, ",")
+	hosts := output.FLBPluginConfigKey(plugin, "clickhouse_hosts")
+	if hosts != "" {
+		ch.logger.Infof("plugin clickhouse_hosts = %s", hosts)
+		ch.hosts = strings.Split(hosts, ",")
 	} else {
-		logger.Error("you must set hosts of clickhouse!")
+		ch.logger.Error("you must set hosts of clickhouse!")
 		return output.FLB_ERROR
 	}
 
-	database = output.FLBPluginConfigKey(plugin, "clickhouse_database")
+	database := output.FLBPluginConfigKey(plugin, "clickhouse_database")
 	if database != "" {
-		logger.Infof("plugin clickhouse_database = %s", database)
+		ch.database = database
+		ch.logger.Infof("plugin clickhouse_database = %s", ch.database)
 	} else {
-		logger.Error("you must set database of clickhouse!")
+		ch.logger.Error("you must set database of clickhouse!")
 		return output.FLB_ERROR
 	}
 
-	username = output.FLBPluginConfigKey(plugin, "clickhouse_username")
+	username := output.FLBPluginConfigKey(plugin, "clickhouse_username")
 	if username != "" {
-		logger.Infof("plugin clickhouse_username = %s", username)
+		ch.username = username
+		ch.logger.Infof("plugin clickhouse_username = %s", ch.username)
 	} else {
-		logger.Error("you must set username of clickhouse!")
+		ch.logger.Error("you must set username of clickhouse!")
 		return output.FLB_ERROR
 	}
 
-	password = output.FLBPluginConfigKey(plugin, "clickhouse_password")
+	password := output.FLBPluginConfigKey(plugin, "clickhouse_password")
 	if password != "" {
-		logger.Infof("plugin clickhouse_password = %s", password)
+		ch.password = password
+		ch.logger.Infof("plugin clickhouse_password = %s", ch.password)
 	} else {
-		logger.Error("you must set password of clickhouse!")
+		ch.logger.Error("you must set password of clickhouse!")
 		return output.FLB_ERROR
 	}
 
-	table = output.FLBPluginConfigKey(plugin, "clickhouse_table")
+	table := output.FLBPluginConfigKey(plugin, "clickhouse_table")
 	if table != "" {
-		logger.Infof("plugin clickhouse_table = %s", table)
+		ch.table = table
+		ch.logger.Infof("plugin clickhouse_table = %s", ch.table)
 	} else {
-		logger.Error("you must set table of clickhouse!")
+		ch.logger.Error("you must set table of clickhouse!")
 		return output.FLB_ERROR
 	}
 
-	clickhouseColumns := output.FLBPluginConfigKey(plugin, "clickhouse_columns")
-	if clickhouseColumns != "" {
-		logger.Infof("plugin clickhouse_columns = %s", clickhouseColumns)
+	columns := output.FLBPluginConfigKey(plugin, "clickhouse_columns")
+	if columns != "" {
+		ch.columns = strings.Split(columns, ",")
+		ch.logger.Infof("plugin clickhouse_columns = %s", ch.columns)
 		// init insertSQL
-		columns = strings.Split(clickhouseColumns, ",")
-		insertSQL = formatInsertSQL(columns)
-		logger.Trace(insertSQL)
+		ch.insertSQL = formatInsertSQL(ch.columns, ch.table)
+		ch.logger.Infof("insertSQL = %s", ch.insertSQL)
 	} else {
-		logger.Errorf("you must set columns of %v!", table)
+		ch.logger.Errorf("you must set columns of %v!", ch.table)
 		return output.FLB_ERROR
 	}
 
-	var err error
-	clickhouseBufferSize := output.FLBPluginConfigKey(plugin, "clickhouse_buffer_size")
-	if clickhouseBufferSize != "" {
-		logger.Infof("plugin clickhouse_buffer_size = %s", clickhouseBufferSize)
-		bufferSize, err = strconv.Atoi(clickhouseBufferSize)
+	bufferSize := output.FLBPluginConfigKey(plugin, "clickhouse_buffer_size")
+	if bufferSize != "" {
+		intBufferSize, err := strconv.Atoi(bufferSize)
 		if err != nil {
-			logger.Errorf("convert clickhouse_buffer_size to int error: %v!", err)
+			ch.logger.Errorf("convert clickhouse_buffer_size to int error: %v!", err)
 		}
+		ch.bufferSize = intBufferSize
+		ch.logger.Infof("plugin clickhouse_buffer_size = %v", ch.bufferSize)
 	}
 
 	// init conn
-	conn, err = clickhouse.Open(&clickhouse.Options{
-		Addr: hosts,
+	conn, err := clickhouse.Open(&clickhouse.Options{
+		Addr: ch.hosts,
 		Auth: clickhouse.Auth{
-			Database: database,
-			Username: username,
-			Password: password,
+			Database: ch.database,
+			Username: ch.username,
+			Password: ch.password,
 		},
 		DialContext: func(ctx context.Context, addr string) (net.Conn, error) {
 			var d net.Dialer
@@ -131,7 +145,7 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		},
 		Debug: true,
 		Debugf: func(format string, v ...any) {
-			logger.Debugf(format, v)
+			ch.logger.Debugf(format, v)
 		},
 		Settings: clickhouse.Settings{
 			"max_execution_time": 60,
@@ -147,14 +161,18 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 		BlockBufferSize:  10,
 	})
 	if err != nil {
-		logger.Errorf("failed to open clickhouse: %v", err)
+		ch.logger.Errorf("failed to open clickhouse: %v", err)
 		return output.FLB_ERROR
 	}
 	err = conn.Ping(context.Background())
 	if err != nil {
-		logger.Errorf("failed to ping clickhouse: %v", err)
+		ch.logger.Errorf("failed to ping clickhouse: %v", err)
 		return output.FLB_ERROR
 	}
+	ch.conn = conn
+
+	ch.buffer = make([]map[interface{}]interface{}, 0)
+	config[id] = ch
 
 	return output.FLB_OK
 }
@@ -162,7 +180,11 @@ func FLBPluginInit(plugin unsafe.Pointer) int {
 //export FLBPluginFlushCtx
 func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int {
 	id := output.FLBPluginGetContext(ctx).(string)
-	logger.Infof("[multiinstance] Flush called for id: %s", id)
+	ch, ok := config[id]
+	if !ok {
+		return output.FLB_ERROR
+	}
+	ch.logger.Infof("flush called for id = %s", id)
 
 	// create Fluent Bit decoder
 	dec := output.NewDecoder(data, int(length))
@@ -173,39 +195,39 @@ func FLBPluginFlushCtx(ctx, data unsafe.Pointer, length C.int, tag *C.char) int 
 		if ret != 0 {
 			break
 		}
-		buffer = append(buffer, record)
+		ch.buffer = append(ch.buffer, record)
 	}
 	// sink data
-	if len(buffer) < bufferSize {
+	if len(ch.buffer) < ch.bufferSize {
 		return output.FLB_OK
 	}
 
 	// post them to db all at once
 	start := time.Now()
-	batch, err := conn.PrepareBatch(context.Background(), insertSQL)
+	batch, err := ch.conn.PrepareBatch(context.Background(), ch.insertSQL)
 	if err != nil {
-		logger.Errorf("prepare batch failure: %v", err)
+		ch.logger.Errorf("prepare batch failure: %v", err)
 		return output.FLB_OK
 	}
-	for _, record := range buffer {
-		values := fieldValues(record, columns)
-		logger.Tracef("values: %v", values)
+	for _, record := range ch.buffer {
+		values := fieldValues(record, ch.columns)
+		ch.logger.Tracef("values: %v", values)
 		err = batch.Append(values...)
 		if err != nil {
-			logger.Errorf("batch append failure: %v", err)
+			ch.logger.Errorf("batch append failure: %v", err)
 			return output.FLB_OK
 		}
 	}
 	err = batch.Send()
 	if err != nil {
-		logger.Errorf("batch send failure: %v", err)
+		ch.logger.Errorf("batch send failure: %v", err)
 		return output.FLB_OK
 	}
 	end := time.Now()
-	logger.Infof("exported %d logs to clickhouse in %s", len(buffer), end.Sub(start))
+	ch.logger.Infof("exported %d logs to clickhouse in %s", len(ch.buffer), end.Sub(start))
 
 	// clear buffer
-	buffer = make([]map[interface{}]interface{}, 0)
+	ch.buffer = make([]map[interface{}]interface{}, 0)
 
 	return output.FLB_OK
 }
@@ -215,9 +237,10 @@ func FLBPluginExit() int {
 	return output.FLB_OK
 }
 
-func initLogger(logLevel string) {
-	logger = logrus.New()
+func initLogger(id, logLevel string) *logrus.Logger {
+	logger := logrus.New()
 	logger.SetOutput(os.Stdout)
+	logger.WithFields(logrus.Fields{"id": id})
 	// trace, debug, info, warning, error, fatal and panic
 	switch logLevel {
 	case "trace":
@@ -237,9 +260,10 @@ func initLogger(logLevel string) {
 	default:
 		logger.SetLevel(logrus.WarnLevel)
 	}
+	return logger
 }
 
-func formatInsertSQL(columns []string) string {
+func formatInsertSQL(columns []string, table string) string {
 	values := ""
 	for i := range columns {
 		values += "?"
@@ -247,7 +271,7 @@ func formatInsertSQL(columns []string) string {
 			values += ","
 		}
 	}
-	return fmt.Sprintf(insertSQL, table, strings.Join(columns, ","), values)
+	return fmt.Sprintf(InsertSQLExpr, table, strings.Join(columns, ","), values)
 }
 
 func fieldValues(record map[interface{}]interface{}, fields []string) (values []interface{}) {
