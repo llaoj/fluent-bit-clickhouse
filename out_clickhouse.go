@@ -18,7 +18,7 @@ import (
 )
 
 type Clickhouse struct {
-	logger     *logrus.Logger
+	logger     *logrus.Entry
 	hosts      []string
 	database   string
 	username   string
@@ -43,7 +43,7 @@ func FLBPluginRegister(def unsafe.Pointer) int {
 //export FLBPluginInit
 func FLBPluginInit(plugin unsafe.Pointer) int {
 	ch := &Clickhouse{
-		logger: logrus.New(),
+		logger: logrus.NewEntry(logrus.New()),
 	}
 
 	id := output.FLBPluginConfigKey(plugin, "id")
@@ -237,10 +237,9 @@ func FLBPluginExit() int {
 	return output.FLB_OK
 }
 
-func initLogger(id, logLevel string) *logrus.Logger {
+func initLogger(id, logLevel string) *logrus.Entry {
 	logger := logrus.New()
 	logger.SetOutput(os.Stdout)
-	logger.WithFields(logrus.Fields{"id": id})
 	// trace, debug, info, warning, error, fatal and panic
 	switch logLevel {
 	case "trace":
@@ -260,7 +259,8 @@ func initLogger(id, logLevel string) *logrus.Logger {
 	default:
 		logger.SetLevel(logrus.WarnLevel)
 	}
-	return logger
+
+	return logger.WithFields(logrus.Fields{"id": id})
 }
 
 func formatInsertSQL(columns []string, table string) string {
